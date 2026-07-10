@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dynamic Vocab Flashcards</title>
+    <!-- Include PDF.js from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background-color: #f4f7f6;
+        margin: 0;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      h1 {
+        color: #333;
+      }
+      .controls {
+        margin-bottom: 20px;
+        display: flex;
+        gap: 10px;
+      }
+      input[type="file"],
+      input[type="text"] {
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+      }
+      button {
+        padding: 10px 15px;
+        background-color: #4caf50;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #45a049;
+      }
+
+      /* Updated Flashcard Styling for Progressive 3-Stage Flips */
+      .card-container {
+        perspective: 1000px;
+        width: 550px; 
+        min-height: 400px; 
+        margin-top: 20px;
+      }
+      .card {
+        width: 100%;
+        height: 100%;
+        min-height: 400px;
+        position: relative;
+        transform-style: preserve-3d;
+        transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        border-radius: 12px;
+      }
+      
+      /* Three step rotation mechanics */
+      .card.step-0 { transform: rotateY(0deg); }
+      .card.step-1 { transform: rotateY(180deg); }
+      .card.step-2 { transform: rotateY(360deg); }
+
+      .card-face {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        min-height: 400px;
+        backface-visibility: hidden;
+        border-radius: 12px;
+        background: white;
+        display: flex;
+        flex-direction: column;
+        padding: 25px; 
+        box-sizing: border-box;
+      }
+      .card-front {
+        color: #2c3e50;
+        justify-content: center;
+        align-items: center;
+      }
+      .card-back {
+        transform: rotateY(180deg);
+        align-items: flex-start;
+        justify-content: flex-start;
+        font-size: 1.05rem;
+      }
+
+      /* Inside Card Styling */
+      .clickable-synonym {
+        color: #3498db;
+        text-decoration: underline;
+        cursor: pointer;
+        margin-right: 5px;
+        display: inline-block;
+      }
+      .clickable-synonym:hover {
+        color: #2980b9;
+      }
+      .section-title {
+        font-weight: bold;
+        margin-top: 10px;
+        color: #7f8c8d;
+      }
+      .example-sentence {
+        font-style: italic;
+        color: #555;
+      }
+      .grammar-info {
+        font-size: 1.2rem;
+        color: #555;
+        margin-top: 10px;
+        text-align: center;
+        white-space: pre-wrap;
+      }
+      .word-main {
+        font-size: 3rem;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Vocab Flashcard Generator</h1>
+
+    <div class="controls">
+      <input type="file" id="pdf-upload" accept=".pdf" multiple />
+      <input
+        type="text"
+        id="manual-word"
+        placeholder="Or type a custom word..."
+      />
+      <button onclick="lookupManualWord()">Search</button>
+    </div>
+
+    <div class="controls" id="navigation" style="display: none">
+      <button onclick="prevWord()">Previous</button>
+      <span id="word-counter">0 / 0</span>
+      <button onclick="nextWord()">Next</button>
+
+      <span style="margin-left: 15px; color: #555">Jump to:</span>
+      <input
+        type="number"
+        id="jump-index"
+        min="1"
+        style="width: 60px; padding: 5px; text-align: center"
+        placeholder="#"
+      />
+      <button
+        onclick="jumpToWord()"
+        style="padding: 5px 10px; background-color: #3498db"
+      >
+        Go
+      </button>
+    </div>
+
+    <!-- Flashcard Structure -->
+    <div class="card-container">
+      <div class="card step-0" id="flashcard" onclick="flipCard(event)">
+        <!-- The Front Face handles Step 0 (Core Word) and Step 2 (API View) -->
+        <div class="card-face card-front" id="card-front-text">
+          Upload a PDF to start!
+        </div>
+        <!-- The Back Face handles Step 1 (PDF Content View) -->
+        <div class="card-face card-back" id="card-back-text">
+          <!-- Data populated dynamically -->
+        </div>
+      </div>
+    </div>
+
+    <script>
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js";
+
+      // Array holding your two baseline PDFs
+      const DEFAULT_PDFS = ["essential.pdf", "advanced.pdf"];
+
+      let wordList = []; // Holds items structured as: { word, grammarText, pdfDetailsText, apiData }
+      let currentIndex = 0;
+      let cardStep = 0; // 0 = Front (Word), 1 = Back (PDF content), 2 = Front Again (API content)
+
+      window.onload = async function () {
+        document.getElementById("card-front-text").innerText = "Loading default word lists...";
+        
+        for (const pdfUrl of DEFAULT_PDFS) {
+          try {
+            const response = await fetch(pdfUrl);
+            if (!response.ok) continue;
+
+            const arrayBuffer = await response.arrayBuffer();
+            const typedarray = new Uint8Array(arrayBuffer);
+            const pdf = await pdfjsLib.getDocument(typedarray).promise;
+            
+            await parseAlternatingPdf(pdf);
+          } catch (error) {
+            console.error(`Error processing default PDF (${pdfUrl}):`, error);
+          }
+        }
+
+        finalizeInitialization();
+      };
+
+      document.getElementById("pdf-upload").addEventListener("change", async (e) => {
+        const files = e.target.files;
+        if (!files.length) return;
+
+        document.getElementById("card-front-text").innerText = "Parsing uploaded file(s)...";
+        wordList = []; // Clear current list on new upload
+
+        for (const file of files) {
+          await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = async function () {
+              const typedarray = new Uint8Array(this.result);
+              const pdf = await pdfjsLib.getDocument(typedarray).promise;
+              await parseAlternatingPdf(pdf);
+              resolve();
+            };
+            reader.readAsArrayBuffer(file);
+          });
+        }
+
+        finalizeInitialization();
+      });
+
+      // Alternating Parser: Skips first 3 pages. 
+      // Even pages (4, 6...) = Word & Grammar. Odd pages (5, 7...) = PDF Details.
+      async function parseAlternatingPdf(pdf) {
+        for (let i = 4; i <= pdf.numPages; i += 2) {
+          if (i + 1 > pdf.numPages) break;
+
+          // Process Even Page (Word / Grammar)
+          const evenPage = await pdf.getPage(i);
+          const evenContent = await evenPage.getTextContent();
+          const grammarText = evenContent.items.map((item) => item.str).join(" ").trim();
+
+          // Isolate the primary vocabulary word from the first word sequence on the page
+          const wordMatch = grammarText.match(/^[a-zA-Z]+/);
+          if (!wordMatch) continue;
+          const word = wordMatch[0].toLowerCase();
+
+          // Process Odd Page (PDF Entry Details)
+          const oddPage = await pdf.getPage(i + 1);
+          const oddContent = await oddPage.getTextContent();
+          const pdfDetailsText = oddContent.items.map((item) => item.str).join(" ").trim();
+
+          // Clean up common clean presentation patterns for visual spacing
+          const formattedDetails = pdfDetailsText
+            .replace(/(Definition:)/g, '<br><span class="section-title">$1</span><br>')
+            .replace(/(Usage:)/g, '<br><br><span class="section-title">$1</span><br>')
+            .replace(/(Related Words:)/g, '<br><br><span class="section-title">$1</span><br>')
+            .replace(/(Memory Trick:)/g, '<br><br><span class="section-title">$1</span><br>');
+
+          wordList.push({
+            word: word,
+            grammarText: grammarText,
+            pdfDetailsText: formattedDetails,
+            apiData: null
+          });
+        }
+      }
+
+      function finalizeInitialization() {
+        if (wordList.length > 0) {
+          currentIndex = 0;
+          document.getElementById("navigation").style.display = "flex";
+          loadCurrentCard();
+        } else {
+          document.getElementById("card-front-text").innerText = "Upload an alternating PDF to start!";
+        }
+      }
+
+      // Prepares a specific word index, syncing display states and firing off API fetchers
+      async function loadCurrentCard() {
+        cardStep = 0;
+        updateCardStateClass();
+        updateCounter();
+
+        const currentItem = wordList[currentIndex];
+        
+        // Render step 0 view on front face immediately
+        document.getElementById("card-front-text").innerHTML = `
+          <div class="word-main">${currentItem.word}</div>
+          <div class="grammar-info">${currentItem.grammarText}</div>
+        `;
+
+        // Render step 1 view on back face immediately
+        document.getElementById("card-back-text").innerHTML = currentItem.pdfDetailsText;
+
+        // If API data hasn't been cached for this word yet, fetch it in background
+        if (!currentItem.apiData) {
+          try {
+            const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${currentItem.word}`);
+            if (response.ok) {
+              currentItem.apiData = await response.json();
+            } else {
+              currentItem.apiData = "NOT_FOUND";
+            }
+          } catch (e) {
+            currentItem.apiData = "NOT_FOUND";
+          }
+        }
+      }
+
+      // Progressive flip interactions (Step 0 -> Step 1 -> Step 2 -> Loop to 0)
+      function flipCard(event) {
+        if (event.target.classList.contains("clickable-synonym")) return;
+
+        const currentItem = wordList[currentIndex];
+
+        if (cardStep === 0) {
+          // Flip over to reveal the PDF Data (Back face)
+          cardStep = 1;
+        } else if (cardStep === 1) {
+          // Prepare the Front Face with the compiled API data right before spinning forward to 360deg
+          renderApiFace(currentItem.word, currentItem.apiData);
+          cardStep = 2;
+        } else {
+          // Reset smoothly back to 0
+          cardStep = 0;
+          document.getElementById("card-front-text").innerHTML = `
+            <div class="word-main">${currentItem.word}</div>
+            <div class="grammar-info">${currentItem.grammarText}</div>
+          `;
+        }
+        updateCardStateClass();
+      }
+
+      function updateCardStateClass() {
+        const card = document.getElementById("flashcard");
+        card.className = `card step-${cardStep}`;
+      }
+
+      // Builds the markup structure for the API layer view
+      function renderApiFace(word, rawData) {
+        if (!rawData || rawData === "NOT_FOUND") {
+          document.getElementById("card-front-text").innerHTML = `
+            <div class="section-title" style="color:red; margin-top:0;">API Lookup Failed:</div>
+            <p>No extra web definitions found for "${word}".</p>
+            <p style="font-size:0.9rem; color:#777;">Click card to return to front page.</p>
+          `;
+          return;
+        }
+
+        const dataArray = Array.isArray(rawData) ? rawData : [rawData];
+        let definitionsArray = [];
+        let example = "";
+        let synonymSet = new Set();
+
+        for (const entry of dataArray) {
+          if (!entry || !entry.meanings) continue;
+          for (const meaning of entry.meanings) {
+            if (meaning.synonyms) meaning.synonyms.forEach((syn) => synonymSet.add(syn));
+            if (meaning.definitions) {
+              for (const def of meaning.definitions) {
+                if (def.definition) {
+                  const part = meaning.partOfSpeech ? `<em>(${meaning.partOfSpeech})</em> ` : "";
+                  definitionsArray.push(`${part}${def.definition}`);
+                }
+                if (!example && def.example) example = def.example;
+                if (def.synonyms) def.synonyms.forEach((syn) => synonymSet.add(syn));
+              }
+            }
+          }
+        }
+
+        let definitionsHTML = "No web definitions found.";
+        if (definitionsArray.length > 0) {
+          definitionsHTML = `<ol style="margin: 0; padding-left: 20px; text-align: left;">` +
+            definitionsArray.slice(0, 5).map((def) => `<li>${def}</li>`).join("") + `</ol>`;
+        }
+
+        const finalSynonyms = Array.from(synonymSet);
+        let synonymsHTML = "None found.";
+        if (finalSynonyms.length > 0) {
+          synonymsHTML = finalSynonyms.slice(0, 6).map((syn) =>
+            `<span class="clickable-synonym" onclick="lookupNestedWord('${syn}')">${syn}</span>`
+          ).join(", ");
+        }
+
+        document.getElementById("card-front-text").innerHTML = `
+          <div style="width: 100%; text-align: left; font-size: 1rem; font-weight: normal;">
+            <div class="section-title" style="margin-top: 0; color:#2ecc71;">Dictionary API Meanings:</div>
+            <div style="width: 100%; margin-bottom: 10px;">${definitionsHTML}</div>
+            
+            <div class="section-title">Web Example:</div>
+            <div class="example-sentence">${example ? `"${example}"` : "No example sentence available."}</div>
+            
+            <div class="section-title">Synonyms (Explore):</div>
+            <div style="margin-top: 5px;">${synonymsHTML}</div>
+          </div>
+        `;
+      }
+
+      function lookupNestedWord(word) {
+        wordList.push({
+          word: word.toLowerCase(),
+          grammarText: "Explored via Synonyms link",
+          pdfDetailsText: "No local PDF data available for nested lookups.",
+          apiData: null
+        });
+        currentIndex = wordList.length - 1;
+        loadCurrentCard();
+      }
+
+      function lookupManualWord() {
+        const word = document.getElementById("manual-word").value.trim().toLowerCase();
+        if (word) lookupNestedWord(word);
+      }
+
+      function nextWord() {
+        if (currentIndex < wordList.length - 1) {
+          currentIndex++;
+          loadCurrentCard();
+        }
+      }
+
+      function prevWord() {
+        if (currentIndex > 0) {
+          currentIndex--;
+          loadCurrentCard();
+        }
+      }
+
+      function updateCounter() {
+        if (wordList.length > 0) {
+          document.getElementById("word-counter").innerText = `${currentIndex + 1} / ${wordList.length}`;
+          document.getElementById("jump-index").max = wordList.length;
+        }
+      }
+
+      function jumpToWord() {
+        const input = document.getElementById("jump-index");
+        const targetNumber = parseInt(input.value, 10);
+        if (isNaN(targetNumber) || targetNumber < 1 || targetNumber > wordList.length) {
+          alert(`Please enter a valid card number between 1 and ${wordList.length}`);
+          return;
+        }
+        currentIndex = targetNumber - 1;
+        loadCurrentCard();
+        input.value = "";
+      }
+
+      document.getElementById("jump-index").addEventListener("keypress", function (e) {
+        if (e.key === "Enter") jumpToWord();
+      });
+    </script>
+  </body>
+</html>
