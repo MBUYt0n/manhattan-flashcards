@@ -288,8 +288,15 @@
           <div class="grammar-info">${currentItem.grammarText}</div>
         `;
 
-        // Render step 1 view on back face immediately
-        document.getElementById("card-back-text").innerHTML = currentItem.pdfDetailsText;
+        // Render step 1 view on back face immediately, pinning the main word dynamically at the top
+        document.getElementById("card-back-text").innerHTML = `
+          <div style="font-size: 1.8rem; font-weight: bold; color: #2c3e50; margin-bottom: 15px; border-bottom: 2px solid #ecf0f1; padding-bottom: 8px; width: 100%; text-transform: capitalize; text-align: left;">
+              ${currentItem.word}
+          </div>
+          <div style="width: 100%; text-align: left;">
+              ${currentItem.pdfDetailsText}
+          </div>
+        `;
 
         // If API data hasn't been cached for this word yet, fetch it in background
         if (!currentItem.apiData) {
@@ -339,9 +346,14 @@
       function renderApiFace(word, rawData) {
         if (!rawData || rawData === "NOT_FOUND") {
           document.getElementById("card-front-text").innerHTML = `
-            <div class="section-title" style="color:red; margin-top:0;">API Lookup Failed:</div>
-            <p>No extra web definitions found for "${word}".</p>
-            <p style="font-size:0.9rem; color:#777;">Click card to return to front page.</p>
+            <div style="width: 100%; text-align: left;">
+              <div style="font-size: 1.8rem; font-weight: bold; color: #2c3e50; margin-bottom: 15px; border-bottom: 2px solid #ecf0f1; padding-bottom: 8px; width: 100%; text-transform: capitalize;">
+                  ${word}
+              </div>
+              <div class="section-title" style="color:red; margin-top:0;">API Lookup Failed:</div>
+              <p>No extra web definitions found for "${word}".</p>
+              <p style="font-size:0.9rem; color:#777;">Click card to return to front page.</p>
+            </div>
           `;
           return;
         }
@@ -384,6 +396,10 @@
 
         document.getElementById("card-front-text").innerHTML = `
           <div style="width: 100%; text-align: left; font-size: 1rem; font-weight: normal;">
+            <div style="font-size: 1.8rem; font-weight: bold; color: #2c3e50; margin-bottom: 15px; border-bottom: 2px solid #ecf0f1; padding-bottom: 8px; width: 100%; text-transform: capitalize;">
+                ${word}
+            </div>
+            
             <div class="section-title" style="margin-top: 0; color:#2ecc71;">Dictionary API Meanings:</div>
             <div style="width: 100%; margin-bottom: 10px;">${definitionsHTML}</div>
             
@@ -426,6 +442,7 @@
         }
       }
 
+      // Syncs maximum boundary indices and navigation displays
       function updateCounter() {
         if (wordList.length > 0) {
           document.getElementById("word-counter").innerText = `${currentIndex + 1} / ${wordList.length}`;
